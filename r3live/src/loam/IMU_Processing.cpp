@@ -325,6 +325,7 @@ void ImuProcess::lic_point_cloud_undistort( const MeasureGroup &meas, const Stat
     IMU_pose.push_back( set_pose6d( 0.0, acc_s_last, angvel_last, state_inout.vel_end, state_inout.pos_end, state_inout.rot_end ) );
 
     /*** forward propagation at each imu point ***/
+    // IMU前向计算
     Eigen::Vector3d acc_imu, angvel_avr, acc_avr, vel_imu( state_inout.vel_end ), pos_imu( state_inout.pos_end );
     Eigen::Matrix3d R_imu( state_inout.rot_end );
     Eigen::MatrixXd F_x( Eigen::Matrix< double, DIM_OF_STATES, DIM_OF_STATES >::Identity() );
@@ -392,6 +393,7 @@ void ImuProcess::lic_point_cloud_undistort( const MeasureGroup &meas, const Stat
 #endif
 
     /*** undistort each lidar point (backward propagation) ***/
+    // Lidar反向传播去畸变
     auto it_pcl = pcl_out.points.end() - 1;
     for ( auto it_kp = IMU_pose.end() - 1; it_kp != IMU_pose.begin(); it_kp-- )
     {

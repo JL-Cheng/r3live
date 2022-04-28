@@ -116,15 +116,17 @@ int main( int argc, char **argv )
     n.param< int >( "Lidar_front_end/point_step", g_LiDAR_sampling_point_step, 3 );
     n.param< int >( "Lidar_front_end/using_raw_point", g_if_using_raw_point, 1 );
 
-    jump_up_limit = cos( jump_up_limit / 180 * M_PI );
-    jump_down_limit = cos( jump_down_limit / 180 * M_PI );
-    cos160 = cos( cos160 / 180 * M_PI );
-    smallp_intersect = cos( smallp_intersect / 180 * M_PI );
+    // 获取参数, 定义相关变量，定义了几个全局变量角度值，下面会用到
+    jump_up_limit = cos( jump_up_limit / 180 * M_PI ); // cos(170度)
+    jump_down_limit = cos( jump_down_limit / 180 * M_PI ); // cos(8度)
+    cos160 = cos( cos160 / 180 * M_PI ); // cos(160度)
+    smallp_intersect = cos( smallp_intersect / 180 * M_PI ); // cos(172.5度)
 
     ros::Subscriber sub_points;
 
     switch ( lidar_type )
     {
+    // 2. 接收原始激光点云并处理， 提取角点特征和面特征
     case MID:
         printf( "MID40\n" );
         sub_points = n.subscribe( "/livox/lidar", 1000, mid_handler, ros::TransportHints().tcpNoDelay() );
@@ -151,9 +153,10 @@ int main( int argc, char **argv )
         break;
     }
 
-    pub_full = n.advertise< sensor_msgs::PointCloud2 >( "/laser_cloud", 100 );
-    pub_surf = n.advertise< sensor_msgs::PointCloud2 >( "/laser_cloud_flat", 100 );
-    pub_corn = n.advertise< sensor_msgs::PointCloud2 >( "/laser_cloud_sharp", 100 );
+    // 3. 通过pub_full,pub_surf,pub_corn 将消息发布出去
+    pub_full = n.advertise< sensor_msgs::PointCloud2 >( "/laser_cloud", 100 ); // 发布转换后的消息
+    pub_surf = n.advertise< sensor_msgs::PointCloud2 >( "/laser_cloud_flat", 100 ); //发布面特征消息
+    pub_corn = n.advertise< sensor_msgs::PointCloud2 >( "/laser_cloud_sharp", 100 ); //发布角点特征消息
 
     ros::spin();
     return 0;
@@ -162,26 +165,33 @@ int main( int argc, char **argv )
 double vx, vy, vz;
 void   mid_handler( const sensor_msgs::PointCloud2::ConstPtr &msg )
 {
-    pcl::PointCloud< PointType > pl;
-    pcl::fromROSMsg( *msg, pl );
+    // 点云格式转换（ros下sensor_msgs::PointCloud2格式 -> pcl::PointCloud< PointType >）
+    // 其中PointType为pcl::PointXYZINormal
+    pcl::PointCloud< PointType > pl; // 存放Lidar点的一维数组
+    pcl::fromROSMsg( *msg, pl ); // 通过PointCloud2格式的msg初始化PointXYZINormal的pl
 
-    pcl::PointCloud< PointType > pl_corn, pl_surf;
+    // 定义提取的角点和平面点变量
+    pcl::PointCloud< PointType > pl_corn, pl_surf; // 保存提取的角点和平面点
     vector< orgtype >            types;
-    uint                         plsize = pl.size() - 1;
+    uint                         plsize = pl.size() - 1; // Lidar点数量
     pl_corn.reserve( plsize );
     pl_surf.reserve( plsize );
     types.resize( plsize + 1 );
 
+    // 遍历msg中的前n-1个点,保存在types中
     for ( uint i = 0; i < plsize; i++ )
     {
         types[ i ].range = pl[ i ].x;
+        // 相邻两点做差得到两点构成的向量
         vx = pl[ i ].x - pl[ i + 1 ].x;
         vy = pl[ i ].y - pl[ i + 1 ].y;
         vz = pl[ i ].z - pl[ i + 1 ].z;
-        types[ i ].dista = vx * vx + vy * vy + vz * vz;
+        types[ i ].dista = vx * vx + vy * vy + vz * vz; // // 向量模长(少开根号)
     }
     // plsize++;
     types[ plsize ].range = sqrt( pl[ plsize ].x * pl[ plsize ].x + pl[ plsize ].y * pl[ plsize ].y );
+
+    // 提取角点特征(pl_corn)和面特征(pl_surf)
 
     give_feature( pl, types, pl_corn, pl_surf );
 
@@ -212,14 +222,14 @@ void horizon_handler( const livox_ros_driver::CustomMsg::ConstPtr &msg )
     for ( uint i = 1; i < plsize; i++ )
     {
         // clang-format off
-        if ( ( msg->points[ i ].line < N_SCANS ) 
-            && ( !IS_VALID( msg->points[ i ].x ) ) 
-            && ( !IS_VALID( msg->points[ i ].y ) ) 
+        if ( ( msg->points[ i ].line < N_SCANS )
+            && ( !IS_VALID( msg->points[ i ].x ) )
+            && ( !IS_VALID( msg->points[ i ].y ) )
             && ( !IS_VALID( msg->points[ i ].z ) )
             && msg->points[ i ].x > 0.7 )
         {
             // https://github.com/Livox-SDK/Livox-SDK/wiki/Livox-SDK-Communication-Protocol
-            // See [3.4 Tag Information] 
+            // See [3.4 Tag Information]
             if ( ( msg->points[ i ].x > 2.0 )
                 && ( ( ( msg->points[ i ].tag & 0x03 ) != 0x00 )  ||  ( ( msg->points[ i ].tag & 0x0C ) != 0x00 ) )
                 )
@@ -380,10 +390,15 @@ void oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     pub_func( pl_processed, pub_corn, msg->header.stamp );
 }
 
-
+// give_feature函数：
+// pl : Lidar帧的原始点容器
+// types : 对Lidar原始点计算了相邻两点距离后的点容器
+// pl_corn : 存放提取到的点特征
+// pl_surf : 存放提取到的面特征
 void give_feature( pcl::PointCloud< PointType > &pl, vector< orgtype > &types, pcl::PointCloud< PointType > &pl_corn,
                    pcl::PointCloud< PointType > &pl_surf )
 {
+    // (1)预先判断点数量和点的距离
     uint plsize = pl.size();
     uint plsize2;
     if ( plsize == 0 )
@@ -521,6 +536,7 @@ void give_feature( pcl::PointCloud< PointType > &pl, vector< orgtype > &types, p
         return;
     }
     plsize2 = plsize > 3 ? plsize - 3 : 0;
+    // (2)对head到plsize2进行计算
     for ( uint i = head + 3; i < plsize2; i++ )
     {
         if ( types[ i ].range < blind || types[ i ].ftype >= Real_Plane )

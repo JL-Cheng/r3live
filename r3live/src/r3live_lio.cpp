@@ -1,21 +1,21 @@
-/* 
-This code is the implementation of our paper "R3LIVE: A Robust, Real-time, RGB-colored, 
+/*
+This code is the implementation of our paper "R3LIVE: A Robust, Real-time, RGB-colored,
 LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package".
 
 Author: Jiarong Lin   < ziv.lin.ljr@gmail.com >
 
 If you use any code of this repo in your academic research, please cite at least
 one of our papers:
-[1] Lin, Jiarong, and Fu Zhang. "R3LIVE: A Robust, Real-time, RGB-colored, 
-    LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package." 
+[1] Lin, Jiarong, and Fu Zhang. "R3LIVE: A Robust, Real-time, RGB-colored,
+    LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package."
 [2] Xu, Wei, et al. "Fast-lio2: Fast direct lidar-inertial odometry."
 [3] Lin, Jiarong, et al. "R2LIVE: A Robust, Real-time, LiDAR-Inertial-Visual
-     tightly-coupled state Estimator and mapping." 
-[4] Xu, Wei, and Fu Zhang. "Fast-lio: A fast, robust lidar-inertial odometry 
+     tightly-coupled state Estimator and mapping."
+[4] Xu, Wei, and Fu Zhang. "Fast-lio: A fast, robust lidar-inertial odometry
     package by tightly-coupled iterated kalman filter."
-[5] Cai, Yixi, Wei Xu, and Fu Zhang. "ikd-Tree: An Incremental KD Tree for 
+[5] Cai, Yixi, Wei Xu, and Fu Zhang. "ikd-Tree: An Incremental KD Tree for
     Robotic Applications."
-[6] Lin, Jiarong, and Fu Zhang. "Loam-livox: A fast, robust, high-precision 
+[6] Lin, Jiarong, and Fu Zhang. "Loam-livox: A fast, robust, high-precision
     LiDAR odometry and mapping package for LiDARs of small FoV."
 
 For commercial use, please contact me < ziv.lin.ljr@gmail.com > and
@@ -47,12 +47,14 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 */
 #include "r3live.hpp"
 
+// 收到IMU topic之后会触发的回调函数
 void R3LIVE::imu_cbk( const sensor_msgs::Imu::ConstPtr &msg_in )
 {
     sensor_msgs::Imu::Ptr msg( new sensor_msgs::Imu( *msg_in ) );
     double                timestamp = msg->header.stamp.toSec();
     g_camera_lidar_queue.imu_in( timestamp );
     mtx_buffer.lock();
+    // imu回环之后重置buffer
     if ( timestamp < last_timestamp_imu )
     {
         ROS_ERROR( "imu loop back, clear buffer" );
@@ -63,6 +65,7 @@ void R3LIVE::imu_cbk( const sensor_msgs::Imu::ConstPtr &msg_in )
 
     last_timestamp_imu = timestamp;
 
+    // 如果加速度需要乘重力加速度就乘一下
     if ( g_camera_lidar_queue.m_if_acc_mul_G )
     {
         msg->linear_acceleration.x *= G_m_s2;
@@ -70,6 +73,7 @@ void R3LIVE::imu_cbk( const sensor_msgs::Imu::ConstPtr &msg_in )
         msg->linear_acceleration.z *= G_m_s2;
     }
 
+    // lio和viobuffer中存入imu信息
     imu_buffer_lio.push_back( msg );
     imu_buffer_vio.push_back( msg );
     // std::cout<<"got imu: "<<timestamp<<" imu size "<<imu_buffer_lio.size()<<std::endl;
@@ -77,6 +81,7 @@ void R3LIVE::imu_cbk( const sensor_msgs::Imu::ConstPtr &msg_in )
     sig_buffer.notify_all();
 }
 
+// 打印点云的field name
 void printf_field_name( sensor_msgs::PointCloud2::ConstPtr &msg )
 {
     cout << "Input pointcloud field names: [" << msg->fields.size() << "]: ";
@@ -87,13 +92,13 @@ void printf_field_name( sensor_msgs::PointCloud2::ConstPtr &msg )
     cout << endl;
 }
 
-
+// 从ros message获取点云数据
 bool R3LIVE::get_pointcloud_data_from_ros_message( sensor_msgs::PointCloud2::ConstPtr &msg, pcl::PointCloud< pcl::PointXYZINormal > &pcl_pc )
 {
 
     // printf("Frame [%d] %.3f ", g_LiDAR_frame_index,  msg->header.stamp.toSec() - g_camera_lidar_queue.m_first_imu_time);
-    pcl::PointCloud< pcl::PointXYZI > res_pc;
-    scope_color( ANSI_COLOR_YELLOW_BOLD );
+    pcl::PointCloud< pcl::PointXYZI > res_pc;// I是intensity
+    scope_color( ANSI_COLOR_YELLOW_BOLD ); //黄色粗体打印
     // printf_field_name(msg);
     if ( msg->fields.size() < 3 )
     {
@@ -110,7 +115,7 @@ bool R3LIVE::get_pointcloud_data_from_ros_message( sensor_msgs::PointCloud2::Con
             pcl::fromROSMsg( *msg, pcl_pc );
             return true;
         }
-        else if ( ( msg->fields.size() == 4 ) && ( msg->fields[ 3 ].name == "rgb" ) )
+        else if ( ( msg->fields.size() == 4 ) && ( msg->fields[ 3 ].name == "rgb" ) )// 將PointXYZRGB的点云数据转换为PointXYZINormal的点云数据
         {
             double maximum_range = 5;
             get_ros_parameter< double >( m_ros_node_handle, "iros_range", maximum_range, 5 );
@@ -148,14 +153,18 @@ bool R3LIVE::get_pointcloud_data_from_ros_message( sensor_msgs::PointCloud2::Con
     }
 }
 
+// 同步雷达和imu的包
+// struct MeasureGroup: Lidar data and imu dates for the curent process
 bool R3LIVE::sync_packages( MeasureGroup &meas )
 {
+    // 如果lidar和imu的缓冲区中没有数据就返回
     if ( lidar_buffer.empty() || imu_buffer_lio.empty() )
     {
         return false;
     }
 
     /*** push lidar frame ***/
+    // 压入雷达的帧
     if ( !lidar_pushed )
     {
         meas.lidar.reset( new PointCloudXYZINormal() );
@@ -164,20 +173,22 @@ bool R3LIVE::sync_packages( MeasureGroup &meas )
             return false;
         }
         // pcl::fromROSMsg(*(lidar_buffer.front()), *(meas.lidar));
-        meas.lidar_beg_time = lidar_buffer.front()->header.stamp.toSec();
+        meas.lidar_beg_time = lidar_buffer.front()->header.stamp.toSec(); // 雷达开始时间
         lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double( 1000 );
-        meas.lidar_end_time = lidar_end_time;
+        meas.lidar_end_time = lidar_end_time; // 雷达结束时间
         // printf("Input LiDAR time = %.3f, %.3f\n", meas.lidar_beg_time, meas.lidar_end_time);
         // printf_line_mem_MB;
         lidar_pushed = true;
     }
 
+    // 如果imu最后的时间戳小于lidar结束的时间则返回false——时间出了问题
     if ( last_timestamp_imu < lidar_end_time )
     {
         return false;
     }
 
     /*** push imu data, and pop from imu buffer ***/
+    // 压入imu数据，从imu缓冲区中弹出，找到一直到雷达结束时间前的imu时间
     double imu_time = imu_buffer_lio.front()->header.stamp.toSec();
     meas.imu.clear();
     while ( ( !imu_buffer_lio.empty() ) && ( imu_time < lidar_end_time ) )
@@ -189,7 +200,7 @@ bool R3LIVE::sync_packages( MeasureGroup &meas )
         imu_buffer_lio.pop_front();
     }
 
-    lidar_buffer.pop_front();
+    lidar_buffer.pop_front();// 弹出雷达缓冲区的第一帧
     lidar_pushed = false;
     // if (meas.imu.empty()) return false;
     // std::cout<<"[IMU Sycned]: "<<imu_time<<" "<<lidar_end_time<<std::endl;
@@ -197,6 +208,8 @@ bool R3LIVE::sync_packages( MeasureGroup &meas )
 }
 
 // project lidar frame to world
+// 将雷达的帧投影到世界坐标系
+// common_lib.h static const Eigen::Vector3d Lidar_offset_to_IMU(0.04165, 0.02326, -0.0284); // Avia
 void R3LIVE::pointBodyToWorld( PointType const *const pi, PointType *const po )
 {
     Eigen::Vector3d p_body( pi->x, pi->y, pi->z );
@@ -208,6 +221,7 @@ void R3LIVE::pointBodyToWorld( PointType const *const pi, PointType *const po )
     po->intensity = pi->intensity;
 }
 
+// 将RGB的点投影到世界坐标系
 void R3LIVE::RGBpointBodyToWorld( PointType const *const pi, pcl::PointXYZI *const po )
 {
     Eigen::Vector3d p_body( pi->x, pi->y, pi->z );
@@ -224,11 +238,13 @@ void R3LIVE::RGBpointBodyToWorld( PointType const *const pi, pcl::PointXYZI *con
     int reflection_map = intensity * 10000;
 }
 
+// 得到对应方块的索引
 int R3LIVE::get_cube_index( const int &i, const int &j, const int &k )
 {
     return ( i + laserCloudWidth * j + laserCloudWidth * laserCloudHeight * k );
 }
 
+// 确认是否为视场中心点 FOV Field of View 视场  （没有使用过）
 bool R3LIVE::center_in_FOV( Eigen::Vector3f cube_p )
 {
     Eigen::Vector3f dis_vec = g_lio_state.pos_end.cast< float >() - cube_p;
@@ -246,6 +262,7 @@ bool R3LIVE::center_in_FOV( Eigen::Vector3f cube_p )
     return ( ( ang_cos > HALF_FOV_COS ) ? true : false );
 }
 
+// 确认是否为视场角点 FOV Field of View 视场  （没有使用过）
 bool R3LIVE::if_corner_in_FOV( Eigen::Vector3f cube_p )
 {
     Eigen::Vector3f dis_vec = g_lio_state.pos_end.cast< float >() - cube_p;
@@ -257,10 +274,11 @@ bool R3LIVE::if_corner_in_FOV( Eigen::Vector3f cube_p )
     return ( ( ang_cos > HALF_FOV_COS ) ? true : false );
 }
 
+// 雷达和视场分割
 void R3LIVE::lasermap_fov_segment()
 {
     laserCloudValidNum = 0;
-    pointBodyToWorld( XAxisPoint_body, XAxisPoint_world );
+    pointBodyToWorld( XAxisPoint_body, XAxisPoint_world ); // 将雷达的帧投影到世界坐标系
     int centerCubeI = int( ( g_lio_state.pos_end( 0 ) + 0.5 * cube_len ) / cube_len ) + laserCloudCenWidth;
     int centerCubeJ = int( ( g_lio_state.pos_end( 1 ) + 0.5 * cube_len ) / cube_len ) + laserCloudCenHeight;
     int centerCubeK = int( ( g_lio_state.pos_end( 2 ) + 0.5 * cube_len ) / cube_len ) + laserCloudCenDepth;
@@ -277,6 +295,8 @@ void R3LIVE::lasermap_fov_segment()
     T2[ time_log_counter ] = Measures.lidar_beg_time;
     double t_begin = omp_get_wtime();
 
+    // 当中心方块坐标对应的I、J、K在 laserCloudX-(FOV_RANGE+1)~FOV_RANGE 范围内时，对特征矩阵featsArray进行修改，但我感觉这部分代码有问题（300~456）
+    // 每个内层循环的条件都是 for ( ; i >= 1; i-- )，我觉得不对，这是作者直接复制过去的，有问题
     while ( centerCubeI < FOV_RANGE + 1 )
     {
         for ( int j = 0; j < laserCloudHeight; j++ )
@@ -285,7 +305,7 @@ void R3LIVE::lasermap_fov_segment()
             {
                 int i = laserCloudWidth - 1;
 
-                PointCloudXYZINormal::Ptr laserCloudCubeSurfPointer = featsArray[ get_cube_index( i, j, k ) ];
+                PointCloudXYZINormal::Ptr laserCloudCubeSurfPointer = featsArray[ get_cube_index( i, j, k ) ];// 激光点云立方的surf点
                 last_inFOV_flag = _last_inFOV[ cube_index ];
 
                 for ( ; i >= 1; i-- )
@@ -314,7 +334,7 @@ void R3LIVE::lasermap_fov_segment()
                 PointCloudXYZINormal::Ptr laserCloudCubeSurfPointer = featsArray[ get_cube_index( i, j, k ) ];
                 last_inFOV_flag = _last_inFOV[ cube_index ];
 
-                for ( ; i >= 1; i-- )
+                for ( ; i >= 1; i-- ) // i从0开始为什么还是i>=1 i-- ？？？？
                 {
                     featsArray[ get_cube_index( i, j, k ) ] = featsArray[ get_cube_index( i + 1, j, k ) ];
                     _last_inFOV[ get_cube_index( i, j, k ) ] = _last_inFOV[ get_cube_index( i + 1, j, k ) ];
@@ -341,7 +361,7 @@ void R3LIVE::lasermap_fov_segment()
                 PointCloudXYZINormal::Ptr laserCloudCubeSurfPointer = featsArray[ get_cube_index( i, j, k ) ];
                 last_inFOV_flag = _last_inFOV[ cube_index ];
 
-                for ( ; i >= 1; i-- )
+                for ( ; i >= 1; i-- ) // 变量为j为什么还是对i循环，这不就成死循环了？后边同理
                 {
                     featsArray[ get_cube_index( i, j, k ) ] = featsArray[ get_cube_index( i, j - 1, k ) ];
                     _last_inFOV[ get_cube_index( i, j, k ) ] = _last_inFOV[ get_cube_index( i, j - 1, k ) ];
@@ -443,7 +463,7 @@ void R3LIVE::lasermap_fov_segment()
     fov_check_time = omp_get_wtime() - fov_check_begin;
 
     double readd_begin = omp_get_wtime();
-#ifdef USE_ikdtree
+#ifdef USE_ikdtree // 使用kd树
     if ( cub_needrm.size() > 0 )
         ikdtree.Delete_Point_Boxes( cub_needrm );
     delete_box_time = omp_get_wtime() - readd_begin;
@@ -459,10 +479,14 @@ void R3LIVE::lasermap_fov_segment()
     // s_plot6.push_back(omp_get_wtime() - t_begin);
 }
 
+// 收到point cloud topic之后会触发的回调函数
 void R3LIVE::feat_points_cbk( const sensor_msgs::PointCloud2::ConstPtr &msg_in )
 {
     sensor_msgs::PointCloud2::Ptr msg( new sensor_msgs::PointCloud2( *msg_in ) );
+    // 在这里对雷达和IMU数据的时间进行同步
     msg->header.stamp = ros::Time( msg_in->header.stamp.toSec() - m_lidar_imu_time_delay );
+    // 根据输入信息的时间戳判断是否是有效数据
+    // 这里很奇怪，因为这里lidar_in函数只返回1
     if ( g_camera_lidar_queue.lidar_in( msg_in->header.stamp.toSec() + 0.1 ) == 0 )
     {
         return;
@@ -475,12 +499,13 @@ void R3LIVE::feat_points_cbk( const sensor_msgs::PointCloud2::ConstPtr &msg_in )
         lidar_buffer.clear();
     }
     // ROS_INFO("get point cloud at time: %.6f", msg->header.stamp.toSec());
-    lidar_buffer.push_back( msg );
+    lidar_buffer.push_back( msg ); // 将信息压入到雷达缓冲区中
     last_timestamp_lidar = msg->header.stamp.toSec();
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
 
+// 等待渲染的线程结束
 void R3LIVE::wait_render_thread_finish()
 {
     if ( m_render_thread != nullptr )
@@ -490,12 +515,17 @@ void R3LIVE::wait_render_thread_finish()
     }
 }
 
+// LIO线程的主体程序
 int R3LIVE::service_LIO_update()
 {
-    nav_msgs::Path path;
+    nav_msgs::Path path; // Lidar的路径
     path.header.stamp = ros::Time::now();
     path.header.frame_id = "/world";
     /*** variables definition ***/
+    // 变量定义
+    // G : 用于传递协方差用的矩阵
+    // H_T_H : 用于计算kalman增益用的
+    // I_STATE : 单位阵
     Eigen::Matrix< double, DIM_OF_STATES, DIM_OF_STATES > G, H_T_H, I_STATE;
     G.setZero();
     H_T_H.setZero();
@@ -506,12 +536,13 @@ int R3LIVE::service_LIO_update()
     cv::Mat matV1( 3, 3, CV_32F, cv::Scalar::all( 0 ) );
     cv::Mat matP( 6, 6, CV_32F, cv::Scalar::all( 0 ) );
 
-    PointCloudXYZINormal::Ptr feats_undistort( new PointCloudXYZINormal() );
-    PointCloudXYZINormal::Ptr feats_down( new PointCloudXYZINormal() );
-    PointCloudXYZINormal::Ptr laserCloudOri( new PointCloudXYZINormal() );
-    PointCloudXYZINormal::Ptr coeffSel( new PointCloudXYZINormal() );
+    PointCloudXYZINormal::Ptr feats_undistort( new PointCloudXYZINormal() ); //去除畸变后的点云
+    PointCloudXYZINormal::Ptr feats_down( new PointCloudXYZINormal() ); // 保存下采样后的点云
+    PointCloudXYZINormal::Ptr laserCloudOri( new PointCloudXYZINormal() ); // 存放找到了最近平面的M个点的容器
+    PointCloudXYZINormal::Ptr coeffSel( new PointCloudXYZINormal() ); // 存放 M 个最近平面信息的容器: 平面方程,点-面残差
 
     /*** variables initialize ***/
+    // 变量初始化
     FOV_DEG = fov_deg + 10;
     HALF_FOV_COS = std::cos( ( fov_deg + 10.0 ) * 0.5 * PI_M / 180.0 );
 
@@ -520,10 +551,10 @@ int R3LIVE::service_LIO_update()
         featsArray[ i ].reset( new PointCloudXYZINormal() );
     }
 
-    std::shared_ptr< ImuProcess > p_imu( new ImuProcess() );
+    std::shared_ptr< ImuProcess > p_imu( new ImuProcess() );  // 定义用于前向/后向传播的IMU处理器
     m_imu_process = p_imu;
     //------------------------------------------------------------------------------------------------------
-    ros::Rate rate( 5000 );
+    ros::Rate rate( 5000 ); // 定时器设定频率
     bool      status = ros::ok();
     g_camera_lidar_queue.m_liar_frame_buf = &lidar_buffer;
     set_initial_state_cov( g_lio_state );
@@ -533,6 +564,7 @@ int R3LIVE::service_LIO_update()
             break;
         ros::spinOnce();
         std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+        // 1.camera和lidar在频率上的时间对齐,判断当前时间是否可以处理lidar数据, 不可以则sleep一会.
         while ( g_camera_lidar_queue.if_lidar_can_process() == false )
         {
             ros::spinOnce();
@@ -544,12 +576,15 @@ int R3LIVE::service_LIO_update()
         {
             // printf_line;
             Common_tools::Timer tim;
+            // 2.从lidar_buffer和imu_buffer_lio中分别获取雷达和imu数据,存放至Measures中
             if ( sync_packages( Measures ) == 0 )
             {
                 continue;
             }
             int lidar_can_update = 1;
+            // 设置雷达的开始时间
             g_lidar_star_tim = frame_first_pt_time;
+            // 如果要重置的话就将IMU重置之后重新循环
             if ( flg_reset )
             {
                 ROS_WARN( "reset when rosbag play back" );
@@ -557,7 +592,7 @@ int R3LIVE::service_LIO_update()
                 flg_reset = false;
                 continue;
             }
-            g_LiDAR_frame_index++;
+            g_LiDAR_frame_index++; // 雷达的帧的索引++
             tim.tic( "Preprocess" );
             double t0, t1, t2, t3, t4, t5, match_start, match_time, solve_start, solve_time, pca_time, svd_time;
             match_time = 0;
@@ -566,6 +601,11 @@ int R3LIVE::service_LIO_update()
             pca_time = 0;
             svd_time = 0;
             t0 = omp_get_wtime();
+            // loam/IMU_Processing.cpp
+            // 3.通过测量数据Measures(IMU数据和Lidar数据)计算LIO的状态和去畸变后的Lidar点云数据，LIO状态结果保存在g_lio_state,去运动畸变后的点保存在feats_undistort中
+            // Measures（MeasureGroup loam/include/common_lib.h）中包含点云和IMU数据
+            // g_lio_state （StatesGroup loam/include/common_lib.h）中包含各种旋转、位置、速度、偏置等信息
+            // feats_undistort 去运动畸变后的点
             p_imu->Process( Measures, g_lio_state, feats_undistort );
 
             g_camera_lidar_queue.g_noise_cov_acc = p_imu->cov_acc;
@@ -573,8 +613,11 @@ int R3LIVE::service_LIO_update()
             StatesGroup state_propagate( g_lio_state );
 
             // cout << "G_lio_state.last_update_time =  " << std::setprecision(10) << g_lio_state.last_update_time -g_lidar_star_tim  << endl;
+            // 没有成功去除点云运动
             if ( feats_undistort->empty() || ( feats_undistort == NULL ) )
             {
+                // 重置当前处理lidar帧的起始时间 : 比如当前处理t1-t2间的lidar但失败了
+                // 因此后面处理时间为t1-t3,所以需要把t1保存进frame_first_pt_time
                 frame_first_pt_time = Measures.lidar_beg_time;
                 std::cout << "not ready for odometry" << std::endl;
                 continue;
@@ -590,6 +633,7 @@ int R3LIVE::service_LIO_update()
                 flg_EKF_inited = true;
             }
             /*** Compute the euler angle ***/
+            // 计算欧拉角
             Eigen::Vector3d euler_cur = RotMtoEuler( g_lio_state.rot_end );
 #ifdef DEBUG_PRINT
             std::cout << "current lidar time " << Measures.lidar_beg_time << " "
@@ -598,39 +642,51 @@ int R3LIVE::service_LIO_update()
                       << g_lio_state.vel_end.transpose() << " " << g_lio_state.bias_g.transpose() << " " << g_lio_state.bias_a.transpose()
                       << std::endl;
 #endif
+            // 4.以lidar帧最后一个状态位置构建cube，cube结果放置在featsArray中,表明cube长宽高为48,一共有48^3个体素
             lasermap_fov_segment();
+
+            // 5.根据给定去畸变后的点云构造三维体素栅格,对体素栅格进行下采样达到滤波的目的(一个体素用重心点来近似,减少点的数量,保持点云形状),结果保存在feats_down中
             downSizeFilterSurf.setInputCloud( feats_undistort );
             downSizeFilterSurf.filter( *feats_down );
             // cout <<"Preprocess cost time: " << tim.toc("Preprocess") << endl;
             /*** initialize the map kdtree ***/
+            // 6.使用下采样后得到的特征点云构造ikd树
             if ( ( feats_down->points.size() > 1 ) && ( ikdtree.Root_Node == nullptr ) )
             {
                 // std::vector<PointType> points_init = feats_down->points;
                 ikdtree.set_downsample_param( filter_size_map_min );
-                ikdtree.Build( feats_down->points );
+                ikdtree.Build( feats_down->points ); // 构造ikd树
                 flg_map_initialized = true;
                 continue;
             }
 
-            if ( ikdtree.Root_Node == nullptr )
+            if ( ikdtree.Root_Node == nullptr ) // 构造ikd树失败
             {
                 flg_map_initialized = false;
                 std::cout << "~~~~~~~ Initialize Map iKD-Tree Failed! ~~~~~~~" << std::endl;
                 continue;
             }
-            int featsFromMapNum = ikdtree.size();
+            int featsFromMapNum = ikdtree.size(); // ikd树的节点数
 
-            int feats_down_size = feats_down->points.size();
-            
+            int feats_down_size = feats_down->points.size(); // 下采样过滤后的点数
+
             /*** ICP and iterated Kalman filter update ***/
+            // 7.ICP迭代 + Kalman更新
+            // ICP : 载有雷达（2D或3D）的机器人在移动时，由于机器人产生了一个平移（x，y方向）+一个旋转（机器人的角度），
+            // 所以雷达扫描到的同一个物体得到的点云信息也相应的会出现一个变化，这个变化是一个经过了旋转和平移之后的位姿变化。
+            // ICP可以做的事情就是，求出这个旋转R和平移T。
+            // Kalman滤波：一种利用线性系统状态方程，通过系统输入输出观测数据，对系统状态进行最优估计的算法。
+            // 由于观测数据中包括系统中的噪声和干扰的影响，所以最优估计也可看作是滤波过程。
+
             PointCloudXYZINormal::Ptr coeffSel_tmpt( new PointCloudXYZINormal( *feats_down ) );
             PointCloudXYZINormal::Ptr feats_down_updated( new PointCloudXYZINormal( *feats_down ) );
-            std::vector< double >     res_last( feats_down_size, 1000.0 ); // initial
+            std::vector< double >     res_last( feats_down_size, 1000.0 ); // initial 存放每个特征点的残差值
 
-            if ( featsFromMapNum >= 5 )
+            if ( featsFromMapNum >= 5 ) // ***重点*** : 正式开始ICP和迭代Kalman : ikd树上至少有5个点才进行操作
             {
                 t1 = omp_get_wtime();
 
+                // 在ros上发布ikd特征点云数据，默认不发布
                 if ( m_if_publish_feature_map )
                 {
                     PointVector().swap( ikdtree.PCL_Storage );
@@ -666,6 +722,8 @@ int R3LIVE::service_LIO_update()
                     coeffSel->clear();
 
                     /** closest surface search and residual computation **/
+                    // 遍历所有(下采样后)特征点,搜索每个点在树上的最近点集(5个点),
+	                  // 由最近点集通过PCA方法拟合最近平面,再计算点-面残差，残差定义为点到平面的距离，对应FAST-LIO公式(12)
                     for ( int i = 0; i < feats_down_size; i += m_lio_update_point_step )
                     {
                         double     search_start = omp_get_wtime();
@@ -778,6 +836,7 @@ int R3LIVE::service_LIO_update()
                     double total_residual = 0.0;
                     laserCloudSelNum = 0;
 
+                    // 从找到平面的点中筛选满足条件的点,用新的变量保存该点和对应平面(下标对齐)
                     for ( int i = 0; i < coeffSel_tmpt->points.size(); i++ )
                     {
                         if ( point_selected_surf[ i ] && ( res_last[ i ] <= 2.0 ) )
@@ -794,6 +853,7 @@ int R3LIVE::service_LIO_update()
                     solve_start = omp_get_wtime();
 
                     /*** Computation of Measuremnt Jacobian matrix H and measurents vector ***/
+                    // 计算测量Jacobian矩阵和测量向量
                     Eigen::MatrixXd Hsub( laserCloudSelNum, 6 );
                     Eigen::VectorXd meas_vec( laserCloudSelNum );
                     Hsub.setZero();
@@ -823,6 +883,7 @@ int R3LIVE::service_LIO_update()
                     Eigen::MatrixXd                           K( DIM_OF_STATES, laserCloudSelNum );
 
                     /*** Iterative Kalman Filter Update ***/
+                    // 迭代对卡尔曼滤波进行更新
                     if ( !flg_EKF_inited )
                     {
                         cout << ANSI_COLOR_RED_BOLD << "Run EKF init" << ANSI_COLOR_RESET << endl;
@@ -875,6 +936,7 @@ int R3LIVE::service_LIO_update()
                     }
 
                     /*** Convergence Judgements and Covariance Update ***/
+                    // 判断是否收敛以及对协方差更新
                     // if (rematch_num >= 10 || (iterCount == NUM_MAX_ITERATIONS - 1))
                     if ( rematch_num >= 2 || ( iterCount == NUM_MAX_ITERATIONS - 1 ) ) // Fast lio ori version.
                     {
@@ -902,11 +964,13 @@ int R3LIVE::service_LIO_update()
                 t3 = omp_get_wtime();
 
                 /*** add new frame points to map ikdtree ***/
+
                 PointVector points_history;
                 ikdtree.acquire_removed_points( points_history );
 
                 memset( cube_updated, 0, sizeof( cube_updated ) );
 
+                // 更新维持的固定大小的map立方体
                 for ( int i = 0; i < points_history.size(); i++ )
                 {
                     PointType &pointSel = points_history[ i ];
@@ -929,20 +993,22 @@ int R3LIVE::service_LIO_update()
                     }
                 }
 
+                // 将Kalman更新后的新lidar帧特征点先转世界坐标系,再加入ikd树
                 for ( int i = 0; i < feats_down_size; i++ )
                 {
                     /* transform to world frame */
                     pointBodyToWorld( &( feats_down->points[ i ] ), &( feats_down_updated->points[ i ] ) );
                 }
                 t4 = omp_get_wtime();
-               
+
                 ikdtree.Add_Points( feats_down_updated->points, true );
-                
+
                 kdtree_incremental_time = omp_get_wtime() - t4 + readd_time + readd_box_time + delete_box_time;
                 t5 = omp_get_wtime();
-            }
+            }// ICP迭代+Kalman更新完成
 
             /******* Publish current frame points in world coordinates:  *******/
+            // 8.发布当前帧的点云数据，将laserCloudFullRes2的点转到世界坐标系下,再存入laserCloudFullResColor
             laserCloudFullRes2->clear();
             *laserCloudFullRes2 = dense_map_en ? ( *feats_undistort ) : ( *feats_down );
 
@@ -964,6 +1030,7 @@ int R3LIVE::service_LIO_update()
                 pubLaserCloudFullRes.publish( laserCloudFullRes3 );
             }
 
+            // 9.将点云添加至全局地图中
             if ( g_camera_lidar_queue.m_if_have_camera_data || (g_LiDAR_frame_index < 100) ) // append point cloud to global map.
             {
                 static std::vector< double > stastic_cost_time;
@@ -1009,6 +1076,7 @@ int R3LIVE::service_LIO_update()
             }
 
             /******* Publish Maps:  *******/
+            // 10.Publish Maps: 发布地图
             sensor_msgs::PointCloud2 laserCloudMap;
             pcl::toROSMsg( *featsFromMap, laserCloudMap );
             laserCloudMap.header.stamp.fromSec( Measures.lidar_end_time ); // ros::Time().fromSec(last_timestamp_lidar);
@@ -1016,6 +1084,7 @@ int R3LIVE::service_LIO_update()
             pubLaserCloudMap.publish( laserCloudMap );
 
             /******* Publish Odometry ******/
+            // 11.Publish Odometry 发布里程计
             geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw( euler_cur( 0 ), euler_cur( 1 ), euler_cur( 2 ) );
             odomAftMapped.header.frame_id = "world";
             odomAftMapped.child_frame_id = "/aft_mapped";
@@ -1053,14 +1122,16 @@ int R3LIVE::service_LIO_update()
             msg_body_pose.pose.orientation.w = geoQuat.w;
 
             /******* Publish Path ********/
+            // 12.Publish Path 发布路径
             msg_body_pose.header.frame_id = "world";
             if ( frame_num > 10 )
             {
                 path.poses.push_back( msg_body_pose );
             }
             pubPath.publish( path );
-            
+
             /*** save debug variables ***/
+            // 13. 保存debug的变量
             frame_num++;
             aver_time_consu = aver_time_consu * ( frame_num - 1 ) / frame_num + ( t5 - t0 ) / frame_num;
             // aver_time_consu = aver_time_consu * 0.8 + (t5 - t0) * 0.2;

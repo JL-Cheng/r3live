@@ -1,21 +1,21 @@
-/* 
-This code is the implementation of our paper "R3LIVE: A Robust, Real-time, RGB-colored, 
+/*
+This code is the implementation of our paper "R3LIVE: A Robust, Real-time, RGB-colored,
 LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package".
 
 Author: Jiarong Lin   < ziv.lin.ljr@gmail.com >
 
 If you use any code of this repo in your academic research, please cite at least
 one of our papers:
-[1] Lin, Jiarong, and Fu Zhang. "R3LIVE: A Robust, Real-time, RGB-colored, 
-    LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package." 
+[1] Lin, Jiarong, and Fu Zhang. "R3LIVE: A Robust, Real-time, RGB-colored,
+    LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package."
 [2] Xu, Wei, et al. "Fast-lio2: Fast direct lidar-inertial odometry."
 [3] Lin, Jiarong, et al. "R2LIVE: A Robust, Real-time, LiDAR-Inertial-Visual
-     tightly-coupled state Estimator and mapping." 
-[4] Xu, Wei, and Fu Zhang. "Fast-lio: A fast, robust lidar-inertial odometry 
+     tightly-coupled state Estimator and mapping."
+[4] Xu, Wei, and Fu Zhang. "Fast-lio: A fast, robust lidar-inertial odometry
     package by tightly-coupled iterated kalman filter."
-[5] Cai, Yixi, Wei Xu, and Fu Zhang. "ikd-Tree: An Incremental KD Tree for 
+[5] Cai, Yixi, Wei Xu, and Fu Zhang. "ikd-Tree: An Incremental KD Tree for
     Robotic Applications."
-[6] Lin, Jiarong, and Fu Zhang. "Loam-livox: A fast, robust, high-precision 
+[6] Lin, Jiarong, and Fu Zhang. "Loam-livox: A fast, robust, high-precision
     LiDAR odometry and mapping package for LiDARs of small FoV."
 
 For commercial use, please contact me < ziv.lin.ljr@gmail.com > and
@@ -102,7 +102,7 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 
 #define INIT_TIME (0)
 // #define LASER_POINT_COV (0.0015) // Ori
-#define LASER_POINT_COV (0.00015)    
+#define LASER_POINT_COV (0.00015)
 #define NUM_MATCH_POINTS (5)
 
 #define MAXN 360000
@@ -177,13 +177,13 @@ public:
     std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer_vio;
 
     //surf feature in map
-    PointCloudXYZINormal::Ptr featsFromMap;     
-    PointCloudXYZINormal::Ptr cube_points_add;  
+    PointCloudXYZINormal::Ptr featsFromMap;
+    PointCloudXYZINormal::Ptr cube_points_add;
     //all points
-    PointCloudXYZINormal::Ptr laserCloudFullRes2; 
+    PointCloudXYZINormal::Ptr laserCloudFullRes2;
 
-    Eigen::Vector3f XAxisPoint_body; //(LIDAR_SP_LEN, 0.0, 0.0);
-    Eigen::Vector3f XAxisPoint_world; //(LIDAR_SP_LEN, 0.0, 0.0);
+    Eigen::Vector3f XAxisPoint_body; //(LIDAR_SP_LEN, 0.0, 0.0); 横坐标的点云主体
+    Eigen::Vector3f XAxisPoint_world; //(LIDAR_SP_LEN, 0.0, 0.0); 横坐标的点云投影到世界坐标系
 
     std::vector<BoxPointType> cub_needrm;
     std::vector<BoxPointType> cub_needad;
@@ -223,6 +223,7 @@ public:
 
     /*** debug record ***/
     // R3LIVE() = delete;
+    // 管理着一个内部引用数，使得开启和结束一个节点（node）可以简单地按照下面一行代码完成。
     ros::NodeHandle             m_ros_node_handle;
 
     // ANCHOR - camera measurement related.
@@ -244,7 +245,7 @@ public:
     std::mutex g_mutex_render;
     std::shared_ptr<Image_frame> g_last_image_pose_for_render = nullptr;
     std::list<double> frame_cost_time_vec;
-    Rgbmap_tracker op_track;    
+    Rgbmap_tracker op_track;
     Global_map m_map_rgb_pts;
     int m_maximum_image_buffer = 2;
     int m_track_windows_size = 50;
@@ -253,7 +254,7 @@ public:
     double m_vio_image_heigh = 0;
     int m_if_estimate_i2c_extrinsic = 1;
     int m_if_estimate_intrinsic = 1;
-    double m_control_image_freq =  100; 
+    double m_control_image_freq =  100;
     int m_maximum_vio_tracked_pts = 300;
     int m_lio_update_point_step = 1;
     int m_append_global_map_point_step = 1;
@@ -280,7 +281,7 @@ public:
     std::vector<std::shared_ptr<RGB_pts>> m_last_added_rgb_pts_vec;
     std::string m_map_output_dir;
     std::shared_ptr<std::shared_future<void> > m_render_thread = nullptr;
-    
+
     // VIO subsystem related
     void load_vio_parameters();
     void set_initial_camera_parameter(StatesGroup &state,
@@ -307,13 +308,15 @@ public:
     void set_initial_state_cov(StatesGroup &stat);
     cv::Mat generate_control_panel_img();
     // ANCHOR -  service_pub_rgb_maps
-    
+
     void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in);
 
     bool sync_packages(MeasureGroup &meas);
-    
+
+    // R3LIVE构造函数
     R3LIVE()
     {
+        // 发布topic，返回一个Publisher，负责广播topic。
         pubLaserCloudFullRes = m_ros_node_handle.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 100);
         pubLaserCloudEffect = m_ros_node_handle.advertise<sensor_msgs::PointCloud2>("/cloud_effected", 100);
         pubLaserCloudMap = m_ros_node_handle.advertise<sensor_msgs::PointCloud2>("/Laser_map", 100);
@@ -328,10 +331,12 @@ public:
         pub_path_cam = m_ros_node_handle.advertise<nav_msgs::Path>("/camera_path", 10);
         std::string LiDAR_pointcloud_topic, IMU_topic, IMAGE_topic, IMAGE_topic_compressed;
 
+        // 获取ros参数
         get_ros_parameter<std::string>(m_ros_node_handle, "/LiDAR_pointcloud_topic", LiDAR_pointcloud_topic, std::string("/laser_cloud_flat") );
         get_ros_parameter<std::string>(m_ros_node_handle, "/IMU_topic", IMU_topic, std::string("/livox/imu") );
         get_ros_parameter<std::string>(m_ros_node_handle, "/Image_topic", IMAGE_topic, std::string("/camera/image_color") );
         IMAGE_topic_compressed = std::string(IMAGE_topic).append("/compressed");
+        // 按照蓝色粗体打印收到的topic
         if(1)
         {
             scope_color(ANSI_COLOR_BLUE_BOLD);
@@ -344,6 +349,8 @@ public:
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
+        // 订阅一个topic，收到topic中的消息后触发回调函数
+        // 深度图的应该也需要加在这里
         sub_imu = m_ros_node_handle.subscribe(IMU_topic.c_str(), 2000000, &R3LIVE::imu_cbk, this, ros::TransportHints().tcpNoDelay());
         sub_pcl = m_ros_node_handle.subscribe(LiDAR_pointcloud_topic.c_str(), 2000000, &R3LIVE::feat_points_cbk, this, ros::TransportHints().tcpNoDelay());
         sub_img = m_ros_node_handle.subscribe(IMAGE_topic.c_str(), 1000000, &R3LIVE::image_callback, this, ros::TransportHints().tcpNoDelay());
@@ -354,6 +361,7 @@ public:
         // ANCHOR - ROS parameters
         if ( 1 )
         {
+            // 设置红色字体并获取common参数
             scope_color( ANSI_COLOR_RED );
             get_ros_parameter( m_ros_node_handle, "r3live_common/map_output_dir", m_map_output_dir,
                                Common_tools::get_home_folder().append( "/r3live_output" ) );
@@ -375,6 +383,7 @@ public:
         }
         if ( 1 )
         {
+            // 设置绿色字体并获取lio参数
             scope_color( ANSI_COLOR_GREEN );
             get_ros_parameter( m_ros_node_handle, "r3live_lio/dense_map_enable", dense_map_en, true );
             get_ros_parameter( m_ros_node_handle, "r3live_lio/lidar_time_delay", m_lidar_imu_time_delay, 0.0 );
@@ -394,11 +403,13 @@ public:
         }
         if ( 1 )
         {
+            // 设置蓝色字体并获取vio参数
             scope_color( ANSI_COLOR_BLUE );
             load_vio_parameters();
         }
         if(!Common_tools::if_file_exist(m_map_output_dir))
         {
+            // 设置蓝色加粗字体打印输出目录
             cout << ANSI_COLOR_BLUE_BOLD << "Create r3live output dir: " << m_map_output_dir << ANSI_COLOR_RESET << endl;
             Common_tools::create_dir(m_map_output_dir);
         }
@@ -419,8 +430,8 @@ public:
 
         m_lio_state_fp = fopen( std::string(m_map_output_dir).append("/lic_lio.log").c_str(), "w+");
         m_lio_costtime_fp = fopen(std::string(m_map_output_dir).append("/lic_lio_costtime.log").c_str(), "w+");
-        m_thread_pool_ptr->commit_task(&R3LIVE::service_LIO_update, this);
-             
+        m_thread_pool_ptr->commit_task(&R3LIVE::service_LIO_update, this); // 开启lio线程
+
     }
     ~R3LIVE(){};
 
